@@ -32,6 +32,8 @@ sgdisk -n1:0:0 -t1:BF01 "${DISK}"
 
 partprobe
 sleep 5 # HACK
+# NOTE: encryption is incompatible with grub. force separate boot partition when encryption is desired
+#-O encryption=aes-256-gcm -O keylocation=prompt -O keyformat=passphrase \
 zpool create \
 	-f \
 	-O mountpoint=none \
@@ -142,7 +144,8 @@ export ZPOOL_VDEV_NAME_PATH=1
 grub-mkconfig -o /boot/grub/grub.cfg
 
 # apk grub trigger failed before; ensure that error state will be gone
-apk fix
+# TODO: does not pick up the env var
+#apk fix
 '
 
 # NOTE: root password is not set.
