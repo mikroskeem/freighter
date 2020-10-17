@@ -23,7 +23,7 @@ udevadm control --reload
 udevadm trigger
 sleep 1
 
-sgdisk --force --zap-all "${DISK}"
+sgdisk --zap-all "${DISK}"
 sgdisk -a1 -n2:34:2047 -t2:EF02 "${DISK}"
 #if is_efi; then
 #	sgdisk -n3:1M:+512M -t3:EF00 "${DISK}"
