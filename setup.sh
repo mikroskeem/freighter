@@ -10,16 +10,18 @@ apk update
 
 
 DISK=/dev/disk/by-id/virtio-13377331
+mnt=/mnt
 
-apk add zfs zfs-udev sgdisk eudev e2fsprogs rsync
+apk add zfs zfs-udev sgdisk eudev \
+	grub grub-bios grub-efi
 setup-udev
 modprobe ext4
 modprobe zfs
 
-# needed for zvols
+# needed for /dev/disk/*
 udevadm control --reload
 udevadm trigger
-
+sleep 1
 
 sgdisk --force --zap-all "${DISK}"
 sgdisk -a1 -n2:34:2047 -t2:EF02 "${DISK}"
@@ -40,45 +42,114 @@ zpool create \
 	-O acltype=posixacl \
 	-O canmount=off \
 	-o ashift=12 \
-	-R /mnt rpool "${DISK}-part1"
+	-R "${mnt}" rpool "${DISK}-part1"
 
 zfs create -o mountpoint=none rpool/root
 zfs create -o mountpoint=legacy rpool/root/alpine
+mount -t zfs rpool/root/alpine "${mnt}"
 
-# HACK: install alpine on ext4 first, installer complains otherwise
-zfs create -V 2G rpool/root/alpine-ext4
-sleep 2 # HACK
-mkfs.ext4 /dev/zvol/rpool/root/alpine-ext4
-mount /dev/zvol/rpool/root/alpine-ext4 /mnt
+export ZPOOL_VDEV_NAME_PATH=1 # needed for grub
 
-# NOTE: do not create /mnt/boot
-setup-disk -v /mnt
+# Install bootloader. Must be done before installing system to make grub package trigger work
+#if is_efi; then
+#else
+#grub-install --target=x86_64-efi --bootloader-id=alpine \
+#	--efi-directory="${mnt}/boot" --boot-directory="${mnt}/boot" \
+#	--no-nvram --portable
+grub-install --boot-directory="${mnt}/boot" --target=i386-pc "${DISK}"
+#fi
 
-# copy files over
-mkdir -p /mnt2
-mount -t zfs rpool/root/alpine /mnt2
-rsync -ax /mnt/ /mnt2
+install -o root -g root -D /dev/stdin "${mnt}"/etc/default/grub <<- EOF
+GRUB_TIMEOUT=2
+GRUB_DISABLE_SUBMENU=y
+GRUB_DISABLE_RECOVERY=true
+GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 quiet"
+EOF
 
-# nuke zvol and mount zfs dataset at right place
-umount /mnt
-zfs destroy rpool/root/alpine-ext4
-mount --bind /mnt2 /mnt
+# Install alpine manually using apk
+mkdir -p "${mnt}"/etc/apk/keys/
+cp /etc/apk/keys/* "${mnt}"/etc/apk/keys/
+cp /etc/apk/repositories "${mnt}"/etc/apk/
+
+apk add --root "${mnt}" \
+	--initdb --progress --update-cache --clean-protected \
+	acct linux-lts alpine-base zfs zfs-udev eudev e2fsprogs grub grub-bios grub-efi \
+	chrony openssh-server openssh-client openssl bash
+
+# --quiet \
 
 # post-copy setup
-chroot /mnt /bin/sh -ec '
-setup-udev -n
-apk add zfs zfs-udev
+_hn=alpine
 
-# rewrite mkinitfs
-. /etc/mkinitfs/mkinitfs.conf; echo features=\"${features} zfs\" > /etc/mkinitfs/mkinitfs.conf
+# TODO: options: cdn (default) or fastest
+rm "${mnt}"/etc/apk/repositories
+ROOT="${mnt}" setup-apkrepos -1
+
+ROOT="${mnt}" setup-interfaces -p "${mnt}" -a
+#ROOT="${mnt}" setup-keymap us us
+ROOT="${mnt}" setup-hostname -n "${_hn}"
+ROOT="${mnt}" setup-timezone -z UTC
+ROOT="${mnt}" setup-interfaces -i <<EOF
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+	hostname ${_hn}
+EOF
+
+cat > "${mnt}/etc/resolv.conf" <<EOF
+nameserver 1.1.1.1
+nameserver 1.0.0.1
+EOF
+
+for m in dev proc sys; do
+	mount --bind "/${m}" "${mnt}/${m}"
+done
+
+chroot "${mnt}" /bin/sh -ec '
+# rewrite mkinitfs config
+{
+	. /etc/mkinitfs/mkinitfs.conf
+	echo features=\"${features} zfs\" > /etc/mkinitfs/mkinitfs.conf
+}
 
 # setup boot stuff
+setup-udev -n
 rc-update add zfs-import sysinit
 rc-update add zfs-mount sysinit
+rc-update add zfs-zed sysinit
+rc-update add acpid default
+rc-update add crond default
+rc-update add sshd default
+rc-update add chronyd default
+rc-update add networking boot
+rc-update add urandom boot
 
-# todo: regenerate initramfs
+# set up hostid
+if ! [ -f /etc/hostid ]; then
+	zgenhostid "$(openssl rand -hex 4)"
+fi
+
+# regenerate initramfs
+for d in /lib/modules/*; do
+	kver="$(basename -- "${d}")"
+	mkinitfs "${kver}"
+done
+
+export ZPOOL_VDEV_NAME_PATH=1
+# generate grub config
+grub-mkconfig -o /boot/grub/grub.cfg
+
+# apk grub trigger failed before; ensure that error state will be gone
+apk fix
 '
 
+# NOTE: root password is not set.
 
-#curl -o answers.txt https://mikroskeem.eu/alpine/answers.txt
-#setup-alpine -q -e -f ./answers.txt
+# TODO: recursive unmount?
+#umount -R /mnt
+for m in dev proc sys; do
+	umount "${mnt}/${m}"
+done
+zpool export rpool
