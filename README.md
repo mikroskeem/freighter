@@ -13,7 +13,7 @@ Advantages:
 
 ### Usage
 
-Before using freighter, ensure that a shell is installed, weather this be your literal operating system or something like Git bash on Windows.
+Before using freighter, ensure that a shell is installed, whether this be your literal operating system or something like Git bash on Windows.
 
 Then, after downloading or cloning the `setup.sh` file, run
 
