@@ -87,6 +87,11 @@ _hn=alpine
 rm "${mnt}"/etc/apk/repositories
 ROOT="${mnt}" setup-apkrepos -1
 
+# enable community repo
+mv "${mnt}"/etc/apk/repositories "${mnt}"/etc/apk/repositories.bak
+grep -v "/edge/" "${mnt}"/etc/apk/repositories.bak | sed 's/^#//' > "${mnt}"/etc/apk/repositories
+rm "${mnt}"/etc/apk/repositories.bak
+
 ROOT="${mnt}" setup-interfaces -p "${mnt}" -a
 #ROOT="${mnt}" setup-keymap us us
 ROOT="${mnt}" setup-hostname -n "${_hn}"
@@ -146,6 +151,11 @@ grub-mkconfig -o /boot/grub/grub.cfg
 # apk grub trigger failed before; ensure that error state will be gone
 # TODO: does not pick up the env var
 #apk fix
+
+# install more packages and enable them
+apk add docker
+
+rc-update add docker default
 '
 
 # NOTE: root password is not set.
